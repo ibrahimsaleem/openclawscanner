@@ -148,6 +148,14 @@ Platform-specific deployment notes live under `docs/`:
 
 ---
 
+## Further reading
+
+For a full technical deep dive (architecture, flow diagrams, and integration model), see:
+
+- `docs/doc.md`
+
+---
+
 Lightweight detection scripts for macOS, Linux, and Windows that check for CLI binaries, app bundles, config files, gateway services, and Docker artifacts for OpenClaw and its previous names Moltbot and Clawdbot. Designed for MDM deployment or standalone use.
 
 ---
