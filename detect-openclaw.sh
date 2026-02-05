@@ -1,11 +1,78 @@
 #!/usr/bin/env bash
 # Detection script for OpenClaw / Moltbot / Clawdbot (macOS/Linux)
-# exit codes: 0=not-installed (clean), 1=found (non-compliant), 2=error
+# exit codes:
+#   0 = not-installed (clean)
+#   1 = OpenClaw/Moltbot/Clawdbot installed (non-compliant)
+#   2 = script error
+#   3 = malicious skill installed (from risk.txt)
 
 set -euo pipefail
 
 PROFILE="${OPENCLAW_PROFILE:-}"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+SCAN_SKILLS=false
+
+# Optional CLI flag: --scan-skills enables skill enumeration and malicious-skill checking
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scan-skills)
+      SCAN_SKILLS=true
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+# Global arrays for malicious skills and installed skills (used only when SCAN_SKILLS=true)
+MALICIOUS_SKILLS=()
+INSTALLED_SKILLS=()
+INSTALLED_SKILL_PATHS=()
+
+load_malicious_skills() {
+  # Load malicious skill names from risk.txt into MALICIOUS_SKILLS (lowercased)
+  local script_dir risk_file
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  risk_file="${script_dir}/risk.txt"
+
+  MALICIOUS_SKILLS=()
+  [[ -f "$risk_file" ]] || return 0
+
+  # From the "Malicious Skills" line to EOF, each non-empty, non-comment line is a skill name
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}" # ltrim
+    line="${line%"${line##*[![:space:]]}"}" # rtrim
+    [[ -z "$line" ]] && continue
+    [[ "$line" == \#* ]] && continue
+    MALICIOUS_SKILLS+=("$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')")
+  done < <(awk 'tolower($0) ~ /malicious skills/ {flag=1; next} flag {print}' "$risk_file")
+}
+
+is_skill_malicious() {
+  local name_lc="$1"
+  name_lc="$(printf '%s' "$name_lc" | tr '[:upper:]' '[:lower:]')"
+  local s
+  for s in "${MALICIOUS_SKILLS[@]}"; do
+    if [[ "$s" == "$name_lc" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+collect_installed_skills() {
+  local root="$1"
+  [[ -d "$root" ]] || return 0
+
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    local skill_name
+    skill_name="$(basename "$(dirname "$file")")"
+    INSTALLED_SKILLS+=("$skill_name")
+    INSTALLED_SKILL_PATHS+=("$file")
+  done < <(find "$root" -type f -name 'SKILL.md' 2>/dev/null || true)
+}
 
 detect_platform() {
   case "$(uname -s)" in
@@ -189,7 +256,7 @@ check_docker_images() {
 }
 
 main() {
-  local platform cli_found=false app_found=false state_found=false service_running=false port_listening=false
+  local platform cli_found=false app_found=false state_found=false service_running=false port_listening=false malicious_found=false
   local output=""
 
   out() { output+="$1"$'\n'; }
@@ -247,6 +314,18 @@ main() {
       local state_result
       state_result=$(check_state_dir "$state_dir") && state_found=true
       out "  state-dir: $state_result"
+      if $SCAN_SKILLS; then
+        # skills under OpenClaw state dir
+        if [[ -d "${state_dir}/skills" ]]; then
+          collect_installed_skills "${state_dir}/skills"
+        fi
+        if [[ -d "${state_dir}/extensions" ]]; then
+          local ext_dir
+          for ext_dir in "${state_dir}/extensions"/*; do
+            [[ -d "$ext_dir/skills" ]] && collect_installed_skills "$ext_dir/skills"
+          done
+        fi
+      fi
       local config_result
       config_result=$(check_config "$state_dir")
       out "  config: $config_result"
@@ -262,6 +341,17 @@ main() {
       if [[ -d "$clawdbot_state_dir" ]]; then
         out "  clawdbot-state-dir: $clawdbot_state_dir"
         state_found=true
+        if $SCAN_SKILLS; then
+          if [[ -d "${clawdbot_state_dir}/skills" ]]; then
+            collect_installed_skills "${clawdbot_state_dir}/skills"
+          fi
+          if [[ -d "${clawdbot_state_dir}/extensions" ]]; then
+            local ext_dir2
+            for ext_dir2 in "${clawdbot_state_dir}/extensions"/*; do
+              [[ -d "$ext_dir2/skills" ]] && collect_installed_skills "$ext_dir2/skills"
+            done
+          fi
+        fi
       else
         out "  clawdbot-state-dir: not-found"
       fi
@@ -281,6 +371,17 @@ main() {
       if [[ -d "$moltbot_state_dir" ]]; then
         out "  moltbot-state-dir: $moltbot_state_dir"
         state_found=true
+        if $SCAN_SKILLS; then
+          if [[ -d "${moltbot_state_dir}/skills" ]]; then
+            collect_installed_skills "${moltbot_state_dir}/skills"
+          fi
+          if [[ -d "${moltbot_state_dir}/extensions" ]]; then
+            local ext_dir3
+            for ext_dir3 in "${moltbot_state_dir}/extensions"/*; do
+              [[ -d "$ext_dir3/skills" ]] && collect_installed_skills "$ext_dir3/skills"
+            done
+          fi
+        fi
       else
         out "  moltbot-state-dir: not-found"
       fi
@@ -312,6 +413,18 @@ main() {
       local state_result
       state_result=$(check_state_dir "$state_dir") && state_found=true
       out "state-dir: $state_result"
+      if $SCAN_SKILLS; then
+        # skills under OpenClaw state dir
+        if [[ -d "${state_dir}/skills" ]]; then
+          collect_installed_skills "${state_dir}/skills"
+        fi
+        if [[ -d "${state_dir}/extensions" ]]; then
+          local ext_dir
+          for ext_dir in "${state_dir}/extensions"/*; do
+            [[ -d "$ext_dir/skills" ]] && collect_installed_skills "$ext_dir/skills"
+          done
+        fi
+      fi
       out "config: $(check_config "$state_dir")"
       local configured_port
       configured_port=$(get_configured_port "${state_dir}/openclaw.json")
@@ -326,6 +439,17 @@ main() {
       if [[ -d "$clawdbot_state_dir" ]]; then
         out "clawdbot-state-dir: $clawdbot_state_dir"
         state_found=true
+        if $SCAN_SKILLS; then
+          if [[ -d "${clawdbot_state_dir}/skills" ]]; then
+            collect_installed_skills "${clawdbot_state_dir}/skills"
+          fi
+          if [[ -d "${clawdbot_state_dir}/extensions" ]]; then
+            local ext_dir2
+            for ext_dir2 in "${clawdbot_state_dir}/extensions"/*; do
+              [[ -d "$ext_dir2/skills" ]] && collect_installed_skills "$ext_dir2/skills"
+            done
+          fi
+        fi
       else
         out "clawdbot-state-dir: not-found"
       fi
@@ -345,6 +469,17 @@ main() {
       if [[ -d "$moltbot_state_dir" ]]; then
         out "moltbot-state-dir: $moltbot_state_dir"
         state_found=true
+        if $SCAN_SKILLS; then
+          if [[ -d "${moltbot_state_dir}/skills" ]]; then
+            collect_installed_skills "${moltbot_state_dir}/skills"
+          fi
+          if [[ -d "${moltbot_state_dir}/extensions" ]]; then
+            local ext_dir3
+            for ext_dir3 in "${moltbot_state_dir}/extensions"/*; do
+              [[ -d "$ext_dir3/skills" ]] && collect_installed_skills "$ext_dir3/skills"
+            done
+          fi
+        fi
       else
         out "moltbot-state-dir: not-found"
       fi
@@ -423,11 +558,45 @@ main() {
     running=true
   fi
 
-  # exit codes: 0=not-installed (clean), 1=found (non-compliant), 2=error
+  # skills & malicious skills summary (only if something is installed and scan is enabled)
+  local skills_installed_count=0 malicious_skills_count=0
+  if $installed && $SCAN_SKILLS; then
+    skills_installed_count=${#INSTALLED_SKILLS[@]}
+    if (( skills_installed_count > 0 )); then
+      load_malicious_skills
+      out "skills-installed-count: $skills_installed_count"
+      local i
+      for i in "${!INSTALLED_SKILLS[@]}"; do
+        out "installed-skill: ${INSTALLED_SKILLS[$i]} (path: ${INSTALLED_SKILL_PATHS[$i]})"
+      done
+      for i in "${!INSTALLED_SKILLS[@]}"; do
+        if is_skill_malicious "${INSTALLED_SKILLS[$i]}"; then
+          ((malicious_skills_count++))
+          malicious_found=true
+          out "malicious-skill: ${INSTALLED_SKILLS[$i]} (path: ${INSTALLED_SKILL_PATHS[$i]})"
+        fi
+      done
+      out "malicious-skills-count: $malicious_skills_count"
+    fi
+  fi
+
+  # exit codes:
+  #   0 = not-installed (clean)
+  #   1 = installed (non-compliant), no malicious skills
+  #   2 = script error
+  #   3 = malicious skills installed
   if ! $installed; then
     echo "summary: not-installed"
     printf "%s" "$output"
     exit 0
+  elif $malicious_found; then
+    if $running; then
+      echo "summary: installed-and-running"
+    else
+      echo "summary: installed-not-running"
+    fi
+    printf "%s" "$output"
+    exit 3
   elif $running; then
     echo "summary: installed-and-running"
     printf "%s" "$output"

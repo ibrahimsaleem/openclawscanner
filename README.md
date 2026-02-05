@@ -1,6 +1,7 @@
 # openclawscanner
 
 Lightweight cross-platform detection scripts for **OpenClaw** and its previous names **Moltbot** and **Clawdbot**.  
+When OpenClaw is found, the scripts can also **optionally scan for installed skills** and flag any that match a maintained list of known-malicious skills (currently **341 skills** listed in `risk.txt`, with more to be added over time).  
 These scripts are designed for:
 
 - **MDM / RMM deployment** (Addigy, Intune, Jamf, JumpCloud, Workspace ONE, Kandji, etc.)
@@ -35,13 +36,14 @@ The detectors look for OpenClaw/Moltbot/Clawdbot presence via:
 
 ## Exit codes
 
-Both scripts use the same exit code contract so your MDM policy logic is consistent:
+Both scripts use the same basic exit code contract so your MDM policy logic is consistent, with an **optional** extra code when you enable skill scanning:
 
 | Exit code | Meaning | MDM status suggestion |
 |-----------|---------|-----------------------|
 | `0` | Not installed / no indicators found | **Success (clean)** |
-| `1` | Installed (running or not) | **Error / non-compliant (found)** |
+| `1` | Installed (running or not), no malicious skills detected | **Error / non-compliant (found)** |
 | `2` | Script error (permissions, environment, etc.) | **Error (investigate)** |
+| `3` | Installed and at least one **malicious skill** (from `risk.txt`) detected — only possible when skill scanning is enabled | **Error / high severity (malicious skill)** |
 
 ---
 
@@ -49,7 +51,7 @@ Both scripts use the same exit code contract so your MDM policy logic is consist
 
 ### macOS / Linux
 
-Local run:
+Local run (no skill scan, just core OpenClaw detection):
 
 ```bash
 bash detect-openclaw.sh
@@ -61,7 +63,28 @@ Scan all local users (requires root):
 sudo bash detect-openclaw.sh
 ```
 
-You can deploy the script via MDM custom scripts / extension attributes and branch on the exit code and/or parse the `summary:` line.
+Enable **skill scanning** (enumerate installed skills and match against `risk.txt`):
+
+```bash
+bash detect-openclaw.sh --scan-skills
+```
+
+Or:
+
+```bash
+sudo bash detect-openclaw.sh --scan-skills
+```
+
+When `--scan-skills` is used and OpenClaw is installed, the script will add fields like:
+
+- `skills-installed-count: N`
+- `installed-skill: <name> (path: <path/to/SKILL.md>)`
+- `malicious-skills-count: M`
+- `malicious-skill: <name> (path: <path/to/SKILL.md>)`
+
+and will exit with code **`3`** if `M > 0`.
+
+You can deploy the script via MDM custom scripts / extension attributes and branch on the exit code and/or parse the `summary:` line and the `malicious-*` fields.
 
 Run **directly from GitHub** (no clone) using the raw script URL:
 
@@ -71,13 +94,28 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ibrahimsaleem/openclawscanne
 
 ### Windows (PowerShell)
 
-Local run from an elevated or standard PowerShell session:
+Local run from an elevated or standard PowerShell session (no skill scan, just core detection):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\detect-openclaw.ps1
 ```
 
-Or run **directly from GitHub** (no clone) using the raw script URL:
+Enable **skill scanning**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\detect-openclaw.ps1 -ScanSkills
+```
+
+As with bash, when `-ScanSkills` is used and OpenClaw is installed, the script will emit:
+
+- `skills-installed-count: N`
+- `installed-skill: <name> (path: <path/to/SKILL.md>)`
+- `malicious-skills-count: M`
+- `malicious-skill: <name> (path: <path/to/SKILL.md>)`
+
+and exit with **`3`** if at least one malicious skill is found.
+
+Or run **directly from GitHub** (no clone) using the raw script URL (you can append `-ScanSkills` if desired):
 
 ```powershell
 irm https://raw.githubusercontent.com/ibrahimsaleem/openclawscanner/main/detect-openclaw.ps1 | powershell -ExecutionPolicy Bypass -NoProfile -
@@ -86,7 +124,7 @@ irm https://raw.githubusercontent.com/ibrahimsaleem/openclawscanner/main/detect-
 As with the bash variant, you can:
 
 - key off the **exit code** in your MDM/RMM
-- parse the **text output** for `summary:` and other fields
+- parse the **text output** for `summary:`, `skills-installed-count:`, and `malicious-skills-count:` / `malicious-skill:` fields
 
 If you host these scripts on your own HTTP server or Git repository, update any MDM-side URLs to point at your hosted copies.
 
@@ -127,9 +165,8 @@ docker-image: not-found
 
 ## Roadmap
 
-- **In progress**: extend the scanner to inspect any running or installed OpenClaw instance, **enumerate installed skills**, and flag:
-  - skills known to be malicious or abuse prompt-injection techniques
-  - any other suspicious skills so they can be reviewed by responders.
+- Further hardening of the skill scanner (additional heuristics beyond the static `risk.txt` malicious list).
+- Expand and refresh the malicious skill list in `risk.txt` as new harmful or suspicious skills are discovered. If you identify additional malicious skills, **please open a PR adding them to `risk.txt`** so the wider community benefits from updated detections.
 
 ---
 

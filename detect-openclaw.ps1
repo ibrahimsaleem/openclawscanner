@@ -1,15 +1,101 @@
+param(
+    [switch]$ScanSkills
+)
+
 # Detection script for OpenClaw / Moltbot / Clawdbot (Windows)
-# Exit codes: 0=not-installed (clean), 1=found (non-compliant), 2=error
+# Exit codes:
+#   0 = not-installed (clean)
+#   1 = OpenClaw/Moltbot/Clawdbot installed (non-compliant)
+#   2 = error
+#   3 = malicious skill installed (from risk.txt, only when -ScanSkills is used)
 
 $ErrorActionPreference = "Stop"
 
 $script:Profile = $env:OPENCLAW_PROFILE
 $Port = if ($env:OPENCLAW_GATEWAY_PORT) { $env:OPENCLAW_GATEWAY_PORT } else { 18789 }
 $script:Output = [System.Collections.ArrayList]::new()
+$script:InstalledSkills = [System.Collections.ArrayList]::new()
 
 function Out {
     param([string]$Line)
     [void]$script:Output.Add($Line)
+}
+
+function Get-MaliciousSkillSet {
+    $riskPath = Join-Path (Split-Path -Parent $PSCommandPath) "risk.txt"
+    if (-not (Test-Path $riskPath -PathType Leaf)) { return @() }
+
+    $lines = Get-Content $riskPath
+    $start = $lines | Select-String -Pattern "Malicious Skills" -SimpleMatch | Select-Object -First 1
+    if (-not $start) { return @() }
+
+    $idx = $start.LineNumber
+    if ($idx -ge $lines.Count) { return @() }
+
+    $tail = $lines[$idx..($lines.Count - 1)]
+    $skills = @()
+
+    foreach ($line in $tail) {
+        $token = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($token)) { continue }
+        if ($token.StartsWith("#")) { continue }
+        $skills += $token.ToLowerInvariant()
+    }
+
+    return $skills
+}
+
+function Test-SkillMalicious {
+    param(
+        [string]$Name,
+        [string[]]$MaliciousSet
+    )
+
+    if (-not $MaliciousSet -or -not $Name) { return $false }
+    $nameLc = $Name.ToLowerInvariant()
+    return $MaliciousSet -contains $nameLc
+}
+
+function Get-InstalledSkills {
+    param([string]$Root)
+
+    $results = @()
+    if (-not (Test-Path $Root -PathType Container)) { return $results }
+
+    Get-ChildItem $Root -Recurse -Filter "SKILL.md" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $results += [PSCustomObject]@{
+            Name = $_.Directory.Name
+            Path = $_.FullName
+        }
+    }
+
+    return $results
+}
+
+function Add-SkillsFromStateDir {
+    param([string]$StateDir)
+
+    if (-not $StateDir) { return }
+    if (-not $ScanSkills) { return }
+
+    $skillsRoot = Join-Path $StateDir "skills"
+    if (Test-Path $skillsRoot -PathType Container) {
+        foreach ($s in (Get-InstalledSkills -Root $skillsRoot)) {
+            [void]$script:InstalledSkills.Add($s)
+        }
+    }
+
+    $extensionsRoot = Join-Path $StateDir "extensions"
+    if (Test-Path $extensionsRoot -PathType Container) {
+        Get-ChildItem $extensionsRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $extSkillsRoot = Join-Path $_.FullName "skills"
+            if (Test-Path $extSkillsRoot -PathType Container) {
+                foreach ($s in (Get-InstalledSkills -Root $extSkillsRoot)) {
+                    [void]$script:InstalledSkills.Add($s)
+                }
+            }
+        }
+    }
 }
 
 function Get-StateDir {
@@ -158,6 +244,7 @@ function Main {
     $stateFound = $false
     $serviceRunning = $false
     $portListening = $false
+    $maliciousFound = $false
 
     Out "platform: windows"
 
@@ -193,6 +280,7 @@ function Main {
             if (Test-StateDir $stateDir) {
                 Out "  state-dir: $stateDir"
                 $stateFound = $true
+                Add-SkillsFromStateDir -StateDir $stateDir
             } else {
                 Out "  state-dir: not-found"
             }
@@ -212,6 +300,7 @@ function Main {
             if (Test-StateDir $clawdbotStateDir) {
                 Out "  clawdbot-state-dir: $clawdbotStateDir"
                 $stateFound = $true
+                Add-SkillsFromStateDir -StateDir $clawdbotStateDir
             } else {
                 Out "  clawdbot-state-dir: not-found"
             }
@@ -231,6 +320,7 @@ function Main {
             if (Test-StateDir $moltbotStateDir) {
                 Out "  moltbot-state-dir: $moltbotStateDir"
                 $stateFound = $true
+                Add-SkillsFromStateDir -StateDir $moltbotStateDir
             } else {
                 Out "  moltbot-state-dir: not-found"
             }
@@ -261,6 +351,7 @@ function Main {
             if (Test-StateDir $stateDir) {
                 Out "state-dir: $stateDir"
                 $stateFound = $true
+                Add-SkillsFromStateDir -StateDir $stateDir
             } else {
                 Out "state-dir: not-found"
             }
@@ -281,6 +372,7 @@ function Main {
             if (Test-StateDir $clawdbotStateDir) {
                 Out "clawdbot-state-dir: $clawdbotStateDir"
                 $stateFound = $true
+                Add-SkillsFromStateDir -StateDir $clawdbotStateDir
             } else {
                 Out "clawdbot-state-dir: not-found"
             }
@@ -300,6 +392,7 @@ function Main {
             if (Test-StateDir $moltbotStateDir) {
                 Out "moltbot-state-dir: $moltbotStateDir"
                 $stateFound = $true
+                Add-SkillsFromStateDir -StateDir $moltbotStateDir
             } else {
                 Out "moltbot-state-dir: not-found"
             }
@@ -366,11 +459,48 @@ function Main {
     $installed = $cliFound -or $stateFound -or $dockerInstalled
     $running = $serviceRunning -or $portListening -or $dockerRunning
 
-    # exit codes: 0=not-installed (clean), 1=found (non-compliant), 2=error
+    # Skills and malicious skills summary (only if something is installed and -ScanSkills is used)
+    $skillsInstalledCount = 0
+    $maliciousSkills = @()
+    $maliciousSet = @()
+    if ($installed -and $ScanSkills) {
+        $skillsInstalledCount = $script:InstalledSkills.Count
+        if ($skillsInstalledCount -gt 0) {
+            $maliciousSet = Get-MaliciousSkillSet
+            Out "skills-installed-count: $skillsInstalledCount"
+            foreach ($s in $script:InstalledSkills) {
+                Out "installed-skill: $($s.Name) (path: $($s.Path))"
+                if (Test-SkillMalicious -Name $s.Name -MaliciousSet $maliciousSet) {
+                    $maliciousSkills += $s
+                }
+            }
+            Out "malicious-skills-count: $($maliciousSkills.Count)"
+            foreach ($m in $maliciousSkills) {
+                Out "malicious-skill: $($m.Name) (path: $($m.Path))"
+            }
+            if ($maliciousSkills.Count -gt 0) {
+                $maliciousFound = $true
+            }
+        }
+    }
+
+    # exit codes:
+    #   0 = not-installed (clean)
+    #   1 = installed (non-compliant), no malicious skills
+    #   2 = error
+    #   3 = malicious skills installed
     if (-not $installed) {
         Write-Output "summary: not-installed"
         $script:Output | ForEach-Object { Write-Output $_ }
         exit 0
+    } elseif ($maliciousFound) {
+        if ($running) {
+            Write-Output "summary: installed-and-running"
+        } else {
+            Write-Output "summary: installed-not-running"
+        }
+        $script:Output | ForEach-Object { Write-Output $_ }
+        exit 3
     } elseif ($running) {
         Write-Output "summary: installed-and-running"
         $script:Output | ForEach-Object { Write-Output $_ }
