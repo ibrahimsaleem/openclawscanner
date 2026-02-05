@@ -63,12 +63,24 @@ sudo bash detect-openclaw.sh
 
 You can deploy the script via MDM custom scripts / extension attributes and branch on the exit code and/or parse the `summary:` line.
 
+Run **directly from GitHub** (no clone) using the raw script URL:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ibrahimsaleem/openclawscanner/main/detect-openclaw.sh)
+```
+
 ### Windows (PowerShell)
 
 Local run from an elevated or standard PowerShell session:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\detect-openclaw.ps1
+```
+
+Or run **directly from GitHub** (no clone) using the raw script URL:
+
+```powershell
+irm https://raw.githubusercontent.com/ibrahimsaleem/openclawscanner/main/detect-openclaw.ps1 | powershell -ExecutionPolicy Bypass -NoProfile -
 ```
 
 As with the bash variant, you can:
