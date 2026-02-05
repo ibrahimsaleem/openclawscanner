@@ -212,6 +212,27 @@ On macOS only, also check `/Applications/OpenClaw.app` and emit `app: <path>` or
 
 ![macOS/Linux script flow for detect-openclaw.sh](./assets/openclawscanner-macos-linux-flow.png)
 
+### 3.7 Optional skill scanning
+
+When invoked with the **`--scan-skills`** flag, `detect-openclaw.sh` performs additional, optional checks to identify malicious skills:
+
+- Derives candidate skill roots from each discovered state directory:
+  - `<state-dir>/skills`
+  - `<state-dir>/extensions/*/skills`
+  - This is done for OpenClaw state dirs as well as legacy `.moltbot` and `.clawdbot` dirs, when present.
+- Recursively walks these roots for `SKILL.md` files:
+  - For each `SKILL.md`, the immediate parent directory name is treated as the installed skill name.
+- Loads a list of known-malicious skill names from `risk.txt` (one name per line, ignoring comment lines that start with `#`).
+- Compares each installed skill name against this list:
+  - Emits `skills-installed-count`, `installed-skill`, `malicious-skills-count`, and `malicious-skill` fields when relevant.
+  - If one or more matches are found, the script exits with code `3` instead of `1`, signalling “OpenClaw installed with malicious skills present”.
+
+If `--scan-skills` is not provided, the script skips this entire path and behaves exactly as a pure OpenClaw presence detector.
+
+The following diagram illustrates how the optional skill scanning branch plugs into the existing detection flow:
+
+![Skill scanning flow within detect-openclaw](./assets/openclawscanner-skill-scan-flow.png)
+
 ---
 
 ## 4. Windows script internals (`detect-openclaw.ps1`)
@@ -285,6 +306,24 @@ If found, the script runs `<path> --version` and records the first line as `cli-
 
 ![Windows script flow for detect-openclaw.ps1](./assets/openclawscanner-windows-flow.png)
 
+### 4.7 Optional skill scanning
+
+When invoked with the **`-ScanSkills`** switch, `detect-openclaw.ps1` mirrors the macOS/Linux behavior to detect malicious skills:
+
+- For each discovered state directory (OpenClaw, `.moltbot`, `.clawdbot`), it:
+  - Walks `<state-dir>/skills` and `<state-dir>/extensions/*/skills` for `SKILL.md` files.
+  - Treats the parent directory name of each `SKILL.md` as the installed skill name.
+- Builds an in-memory set of known-malicious skill names by reading `risk.txt`:
+  - Each non-empty line after the `Malicious Skills` header that does not start with `#` is a skill name.
+  - All names are lowercased for comparison.
+- For each installed skill, it:
+  - Emits structured fields mirroring the bash script:
+    - `skills-installed-count`, `installed-skill`, `malicious-skills-count`, `malicious-skill`.
+  - Marks the run as “malicious” if any installed skill is on the list.
+- If any malicious skills are present, the script exits with code `3` instead of `1`.
+
+As on macOS/Linux, omitting `-ScanSkills` disables this entire path and retains the original behavior and performance profile.
+
 ---
 
 ## 5. Output format and exit codes
@@ -306,20 +345,27 @@ Both scripts emit:
   - `gateway-port: <number>|not-listening`
   - `docker-container: <matches>|not-found`
   - `docker-image: <matches>|not-found`
+  - When optional skill scanning is enabled and OpenClaw is installed:
+    - `skills-installed-count: <N>`
+    - `installed-skill: <name> (path: <path/to/SKILL.md>)`
+    - `malicious-skills-count: <M>`
+    - `malicious-skill: <name> (path: <path/to/SKILL.md>)`
 
 ### 5.1 Exit codes
 
-| Exit code | Meaning                             | Summary                   | Recommended MDM status        |
-|-----------|--------------------------------------|---------------------------|--------------------------------|
-| `0`       | OpenClaw/Moltbot/Clawdbot not found | `not-installed`           | **Compliant / Pass / Clean**  |
-| `1`       | Evidence of install (running or not)| `installed-and-running` or `installed-not-running` | **Non-compliant / Fail / With issues** |
-| `2`       | Script error                        | `error` (or similar)      | **Error / Investigate**       |
+| Exit code | Meaning                                                          | Summary                                      | Recommended MDM status                 |
+|-----------|------------------------------------------------------------------|----------------------------------------------|----------------------------------------|
+| `0`       | OpenClaw/Moltbot/Clawdbot not found                             | `not-installed`                              | **Compliant / Pass / Clean**           |
+| `1`       | Evidence of install (running or not), no malicious skills found | `installed-and-running` or `installed-not-running` | **Non-compliant / Fail / With issues** |
+| `2`       | Script error                                                     | `error` (or similar)                         | **Error / Investigate**                |
+| `3`       | Installed and at least one malicious skill (from `risk.txt`) detected (only when skill scanning is enabled) | `installed-and-running` or `installed-not-running` | **Non-compliant / High severity**      |
 
 MDM/RMM platforms typically:
 
 - Treat **0** as “good / compliant”.
 - Treat **1** as “detection found / non-compliant”.
 - Treat **2** as “script failure” and may surface errors in logs.
+- Treat **3** as “malicious content present” and may trigger stronger alerts or auto-remediation.
 
 ---
 
@@ -463,20 +509,15 @@ The `docs/` directory contains **vendor-specific integration guides** that all s
 
 ## 10. Roadmap: skills and prompt-injection detection
 
-The current scripts **do not** inspect OpenClaw skills or LLM prompt content. The roadmap (also reflected in `README.md`) includes:
+The scripts now support optional malicious skill detection based on a static list in `risk.txt` and will emit additional fields and exit code `3` when such skills are found (see sections 3.7, 4.7, and 5).
 
-- Enumerating skills installed for a running or configured OpenClaw instance.
-- Flagging:
-  - Skills known to be malicious (e.g., exfiltration tools, untrusted sources).
-  - Skills suspected of abusing prompt-injection or unsafe model control.
-- Surfacing this as:
-  - Additional fields in the output (e.g., `skills-malicious: ...`).
-  - Potentially refined exit codes or tags for policy engines.
+Future roadmap items (also reflected in `README.md`) include:
 
-These features are **planned** and will be documented with:
-
-- New output field definitions.
-- Updated examples and integration notes.
+- Extending detection beyond a static list to more advanced heuristics, such as:
+  - Behavior-based indicators (e.g., suspicious network activity initiated by skills).
+  - Prompt-injection analysis and detection of unsafe model-control patterns.
+- Supporting automated updates to the malicious skill list (for example, pulling from a curated feed).
+- Surfacing higher-level risk classifications or tags in the output that MDM/RMM systems can consume directly.
 
 ---
 
@@ -496,11 +537,31 @@ These features are **planned** and will be documented with:
   sudo bash detect-openclaw.sh
   ```
 
+  To additionally scan for installed skills and check them against `risk.txt`:
+
+  ```bash
+  bash detect-openclaw.sh --scan-skills
+  ```
+
+  Or, with `sudo`:
+
+  ```bash
+  sudo bash detect-openclaw.sh --scan-skills
+  ```
+
 - **Windows (PowerShell)**:
 
   ```powershell
   powershell -ExecutionPolicy Bypass -File .\detect-openclaw.ps1
   ```
+
+  To enable optional skill scanning:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\detect-openclaw.ps1 -ScanSkills
+  ```
+
+In MDM/RMM contexts, you can branch not just on “installed vs not-installed” but also on exit code `3` to treat “OpenClaw installed with malicious skills” as a higher-severity condition than a plain `1`.
 
 ### 11.2 Direct-from-GitHub one-liners
 
@@ -515,6 +576,8 @@ These features are **planned** and will be documented with:
   ```powershell
   irm https://raw.githubusercontent.com/ibrahimsaleem/openclawscanner/main/detect-openclaw.ps1 | powershell -ExecutionPolicy Bypass -NoProfile -
   ```
+
+  You can also append `-ScanSkills` at the end of the piped command to enable skill scanning in direct-from-GitHub scenarios.
 
 These are useful for:
 
@@ -531,5 +594,5 @@ These are useful for:
 - A **simple exit-code contract** that fits naturally into MDM/RMM compliance models.
 - **Vendor-specific guides** to accelerate integration on Addigy, Intune, Jamf, JumpCloud, Kandji, and VMware Workspace ONE.
 
-The scripts are intentionally **simple, transparent, and read-only**, making them suitable for production detection and incident response workflows. Future work will extend detection to cover **skills and prompt-injection risk** while preserving the same integration patterns.
+The scripts are intentionally **simple, transparent, and read-only**, making them suitable for production detection and incident response workflows. Optional malicious skill scanning builds on this foundation, and future work will deepen detection around **skills and prompt-injection risk** while preserving the same integration patterns.
 
