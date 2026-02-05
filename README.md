@@ -125,6 +125,14 @@ docker-image: not-found
 
 ---
 
+## Roadmap
+
+- **In progress**: extend the scanner to inspect any running or installed OpenClaw instance, **enumerate installed skills**, and flag:
+  - skills known to be malicious or abuse prompt-injection techniques
+  - any other suspicious skills so they can be reviewed by responders.
+
+---
+
 ## MDM integration guides
 
 Platform-specific deployment notes live under `docs/`:
@@ -139,11 +147,6 @@ Platform-specific deployment notes live under `docs/`:
 | Kandji | `docs/kandji.md` |
 
 ---
-
-## License
-
-Apache 2.0 — see `LICENSE` for details.
-# OpenClaw / Moltbot / Clawdbot Detection Scripts
 
 Lightweight detection scripts for macOS, Linux, and Windows that check for CLI binaries, app bundles, config files, gateway services, and Docker artifacts for OpenClaw and its previous names Moltbot and Clawdbot. Designed for MDM deployment or standalone use.
 
