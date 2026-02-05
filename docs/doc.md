@@ -229,7 +229,7 @@ When invoked with the **`--scan-skills`** flag, `detect-openclaw.sh` performs ad
 
 If `--scan-skills` is not provided, the script skips this entire path and behaves exactly as a pure OpenClaw presence detector.
 
-The following diagram illustrates how the optional skill scanning branch plugs into the existing detection flow:
+The following diagram illustrates how the optional skill scanning branch plugs into the existing detection flows:
 
 ![Skill scanning flow within detect-openclaw](./assets/openclawscanner-skill-scan-flow.png)
 
