@@ -11,8 +11,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$script:Profile = $env:OPENCLAW_PROFILE
-$Port = if ($env:OPENCLAW_GATEWAY_PORT) { $env:OPENCLAW_GATEWAY_PORT } else { 18789 }
+# Sanitize profile: alphanumeric, dash, underscore only (safe for paths and task names)
+$script:Profile = if ($env:OPENCLAW_PROFILE) { ($env:OPENCLAW_PROFILE -replace '[^a-zA-Z0-9_-]', '') } else { '' }
+
+# Validate base port (1-65535); default 18789
+$portRaw = if ($env:OPENCLAW_GATEWAY_PORT) { $env:OPENCLAW_GATEWAY_PORT } else { 18789 }
+$portNum = 0
+if ([int]::TryParse($portRaw, [ref]$portNum) -and $portNum -ge 1 -and $portNum -le 65535) {
+    $Port = $portNum
+} else {
+    $Port = 18789
+}
+
 $script:Output = [System.Collections.ArrayList]::new()
 $script:InstalledSkills = [System.Collections.ArrayList]::new()
 
@@ -22,7 +32,8 @@ function Out {
 }
 
 function Get-MaliciousSkillSet {
-    $riskPath = Join-Path (Split-Path -Parent $PSCommandPath) "risk.txt"
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
+    $riskPath = Join-Path $scriptDir "risk.txt"
     if (-not (Test-Path $riskPath -PathType Leaf)) { return @() }
 
     $lines = Get-Content $riskPath
@@ -159,8 +170,23 @@ function Test-CliForUser {
     return $null
 }
 
+function Test-SafeCliPath {
+    param([string]$CliPath)
+    if ([string]::IsNullOrWhiteSpace($CliPath)) { return $false }
+    try {
+        $fullPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CliPath)
+        if (-not $fullPath) { return $false }
+        # Allow only under Program Files or Users (Intune/S1 typical install locations)
+        if ($fullPath -like "C:\Program Files*") { return $true }
+        if ($fullPath -like "C:\Program Files (x86)*") { return $true }
+        if ($fullPath -like "C:\Users*") { return $true }
+    } catch {}
+    return $false
+}
+
 function Get-CliVersion {
     param([string]$CliPath)
+    if (-not (Test-SafeCliPath -CliPath $CliPath)) { return "unknown" }
     try {
         $version = & $CliPath --version 2>$null | Select-Object -First 1
         if ($version) { return $version }
@@ -184,7 +210,8 @@ function Get-ConfiguredPort {
         try {
             $content = Get-Content $ConfigFile -Raw
             if ($content -match '"port"\s*:\s*(\d+)') {
-                return $matches[1]
+                $p = [int]$matches[1]
+                if ($p -ge 1 -and $p -le 65535) { return $matches[1] }
             }
         } catch {}
     }
@@ -207,6 +234,7 @@ function Test-ScheduledTask {
 
 function Test-GatewayPort {
     param([int]$PortNum)
+    if ($PortNum -lt 1 -or $PortNum -gt 65535) { return $false }
     try {
         $result = Test-NetConnection -ComputerName localhost -Port $PortNum -WarningAction SilentlyContinue
         return $result.TcpTestSucceeded

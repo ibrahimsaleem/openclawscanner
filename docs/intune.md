@@ -16,13 +16,16 @@ Intune Remediations allow you to deploy detection scripts to Windows devices. Fo
 
 Save as `detect-openclaw.ps1` and upload the script from this repository, or host it on your own internal server and adjust the download command accordingly.
 
+**Optional skill scanning:** To detect malicious skills, add the `-ScanSkills` parameter and ensure `risk.txt` is in the **same folder** as the script when you package it. Intune runs the script from a working directory where the script is extracted; the script resolves `risk.txt` via `$PSScriptRoot`.
+
 ## Exit Codes
 
 | Exit Code | Intune Status | Meaning |
 |-----------|---------------|---------|
 | 0 | Compliant | OpenClaw not installed |
-| 1 | Non-compliant | OpenClaw detected |
+| 1 | Non-compliant | OpenClaw detected (no malicious skills) |
 | 2 | Error | Script failed |
+| 3 | Non-compliant | OpenClaw detected and malicious skill(s) found (when using `-ScanSkills`) |
 
 ## Assignment
 

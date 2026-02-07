@@ -8,8 +8,19 @@
 
 set -euo pipefail
 
+# Sanitize profile: alphanumeric, dash, underscore only (safe for paths and service names)
 PROFILE="${OPENCLAW_PROFILE:-}"
-PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+PROFILE="${PROFILE//[^a-zA-Z0-9_-]/}"
+
+# Validate base port (1-65535); default 18789
+_port_raw="${OPENCLAW_GATEWAY_PORT:-18789}"
+if [[ "$_port_raw" =~ ^[0-9]+$ ]] && (( _port_raw >= 1 && _port_raw <= 65535 )); then
+  PORT="$_port_raw"
+else
+  PORT="18789"
+fi
+unset _port_raw
+
 SCAN_SKILLS=false
 
 # Optional CLI flag: --scan-skills enables skill enumeration and malicious-skill checking
@@ -224,14 +235,31 @@ check_systemd_service() {
 
 get_configured_port() {
   local config_file="$1"
+  local raw_port
   if [[ -f "$config_file" ]]; then
-    # extract port from json without jq (mdm environments may not have it)
-    grep -o '"port"[[:space:]]*:[[:space:]]*[0-9]*' "$config_file" 2>/dev/null | head -1 | grep -o '[0-9]*$' || true
+    raw_port=$(grep -o '"port"[[:space:]]*:[[:space:]]*[0-9]*' "$config_file" 2>/dev/null | head -1 | grep -o '[0-9]*$' || true)
+    if [[ -n "$raw_port" && "$raw_port" =~ ^[0-9]+$ ]] && (( raw_port >= 1 && raw_port <= 65535 )); then
+      echo "$raw_port"
+    fi
   fi
+}
+
+# Safe to execute CLI only if path is absolute and under allowed roots (prevents injection)
+is_safe_cli_path() {
+  local path="$1"
+  [[ -z "$path" || ! -x "$path" ]] && return 1
+  case "$path" in
+    /usr/*|/opt/*|/home/*|/Users/*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 check_gateway_port() {
   local port="$1"
+  if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+    echo "not-listening"
+    return 1
+  fi
   if nc -z localhost "$port" &>/dev/null; then
     echo "listening"
     return 0
@@ -276,7 +304,11 @@ main() {
   if [[ -n "$cli_result" ]]; then
     cli_found=true
     out "cli: $cli_result"
-    out "cli-version: $("$cli_result" --version 2>/dev/null | head -1 || echo "unknown")"
+    if is_safe_cli_path "$cli_result"; then
+      out "cli-version: $("$cli_result" --version 2>/dev/null | head -1 || echo "unknown")"
+    else
+      out "cli-version: unknown"
+    fi
   fi
 
   if [[ "$platform" == "darwin" ]]; then
@@ -308,7 +340,11 @@ main() {
         if [[ -n "$user_cli" ]]; then
           cli_found=true
           out "  cli: $user_cli"
-          out "  cli-version: $("$user_cli" --version 2>/dev/null | head -1 || echo "unknown")"
+          if is_safe_cli_path "$user_cli"; then
+            out "  cli-version: $("$user_cli" --version 2>/dev/null | head -1 || echo "unknown")"
+          else
+            out "  cli-version: unknown"
+          fi
         fi
       fi
       local state_result
@@ -403,7 +439,11 @@ main() {
         if [[ -n "$user_cli" ]]; then
           cli_found=true
           out "cli: $user_cli"
-          out "cli-version: $("$user_cli" --version 2>/dev/null | head -1 || echo "unknown")"
+          if is_safe_cli_path "$user_cli"; then
+            out "cli-version: $("$user_cli" --version 2>/dev/null | head -1 || echo "unknown")"
+          else
+            out "cli-version: unknown"
+          fi
         fi
       fi
       if ! $cli_found; then
